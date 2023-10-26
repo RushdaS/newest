@@ -1,0 +1,283 @@
+---
+title: "Shiny App"
+format:
+  html:
+    resources: 
+      - shinylive-sw.js
+filters:
+  - shinylive
+---
+
+```{shinylive-r}
+#| standalone: true
+#| viewerHeight: 600
+library(shiny)
+library(shinyjs)
+library(shinydashboard)
+library(shinythemes)
+library(bslib)
+library(DT)
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(gmodels)
+
+header <- dashboardHeader(
+  title="Business Dashboard",
+  titleWidth=300
+)
+
+sidebar<-dashboardSidebar(
+  width = 300,
+  
+  sidebarMenu(
+    hidden(
+      checkboxGroupInput("age","Select the Age group",
+                         choices=c("18-30","30-45",">45"),
+                         selected=c("18-30","30-45",">45"))),
+    hidden(
+      checkboxGroupInput("gender","Select the gender", 
+                         choices=c("F","M"),
+                         selected=c("F","M"))),
+    hidden(
+      selectInput("ID","Select your week number",choices=c(1:24))),
+    hidden(
+      radioButtons("var",label="Select the Variable",      
+                   choices=c("Calls"=2,"Minutes"=3,"Amount"=4)))
+  )
+)
+
+body<-dashboardBody(
+  h2("Customer pattern"),
+  tabsetPanel(id="tabs",type="tabs",
+              tabPanel("Data",value="data",
+                       fluidRow(column(width=4,
+                                       box(title="Choose CSV File", 
+                                           status = "primary", 
+                                           solidHeader = TRUE, width = 12,
+                                           fileInput("file1","",
+                                                     multiple = TRUE,
+                                                     accept = c("text/csv",
+                                                                "text/comma-separated-values,text/plain", ".csv")
+                                           )
+                                       )),
+                                
+                                column(width = 4,
+                                       div(id = 'click',
+           infoBoxOutput("infobox",width = 12)))),
+
+fluidRow(column(4,
+                box(title="Weekwise Average Performance",
+                    status = "warning", solidHeader = TRUE,width = 12,
+                    dataTableOutput("weeks"))),
+         column(4,
+                box(title="Active Customers Distribution",
+                    status = "primary", solidHeader = TRUE,width = 12,
+                    plotOutput("pie")))),
+
+fluidRow(downloadButton('download',"Download Table", class = "butt"))
+        ),
+
+tabPanel("Weekwise Summary",value="summa",
+         box(title="Weekwise Summary",status = "warning", 
+             solidHeader = TRUE, collapsible = FALSE,
+             verbatimTextOutput("sum"))),
+
+tabPanel("Weekly usage",value="Usag",
+         box(title="Weekly usage",status = "primary",
+             solidHeader = TRUE, collapsible = FALSE,
+             plotOutput("usage"))),
+
+tabPanel("Volume of Business",value="vol",
+         box(title="Volume of Business",status = "warning",
+             solidHeader = TRUE, collapsible = FALSE,
+             plotOutput("bar")))
+  )
+)
+
+ui <- fluidPage(theme= shinytheme("cosmo"),
+          useShinyjs(),
+          dashboardPage(header, sidebar, body)
+)
+
+# Run the application
+
+
+server <- function(input,output,session){
+  
+  ############ Tab1 : Data #############  
+  # import data
+  imported_data <- reactive({
+#     
+# CustID<- c(1001,1002,1003,1004,1005)
+# Week<- c(1,1,1,1,1)
+# Calls<- c(50,60,90,40,30)
+# Minutes <- c(12,48,60,23,42)
+# Amt <- c(100,80,90,120,130)
+# Gender <- c("F","M","M","F","F")
+# Active <- c("Yes","Yes","Yes","Yes","Yes")
+# Age_Group<-c("18-30", ">45","30-45","18-30",">45")
+# 
+# df<-data.frame(CustID, Week, Calls, Minutes, Amt, Gender, Active, Age_Group)
+    df <- read.csv(input$file1$datapath,header = TRUE)
+    df$Gender <- as.factor(df$Gender)
+    df$Active <- as.factor(df$Active)
+    df$Age_Group <- as.factor(df$Age_Group)
+    return(df)
+  })
+  
+  # Rendering infoBox :
+  output$infobox <- renderInfoBox({
+    teledata <- imported_data()
+    cust_cnt <- length(unique(teledata$CustID))
+
+    infoBox(
+      value = cust_cnt,"Total Customers", icon = icon("arrow-up"),
+      color = "maroon", fill = T )
+  })
+  # # Getting CrossTable on clicking on infoBox :
+  onclick('click', showModal(modalDialog(
+    title = "Customer Distribution",
+    renderPrint({
+      teledata <- imported_data()
+      dt <- subset(teledata, select =c("CustID","Gender","Age_Group"))
+      dt <- dt[!duplicated(dt),]
+      CrossTable(dt$Age_Group,dt$Gender, prop.r = FALSE,
+                 prop.c = FALSE, prop.t = FALSE,
+                 prop.chisq = FALSE)
+    })
+  )))
+  
+  # Weekly Average performance :
+  week_Avg <- reactive({
+  #   
+    teledata <- imported_data()
+  #   
+    xy <- subset(teledata, (Age_Group %in% input$age) & (Gender %in% input$gender))
+  #   
+    summ <- summarise(group_by(teledata,Week), Avg_Calls=mean(Calls),
+                      Avg_Minutes=mean(Minutes),Avg_Amt=mean(Amt))
+  #   
+    summ <- round(summ,2)
+    summ
+  })
+  
+  output$weeks<-renderDataTable({
+    week_Avg()
+  })
+
+  
+  # Download Button :
+  output$download <- downloadHandler(
+    filename = function(){
+      paste("Weekly Summary.csv")
+    },
+    content = function(file){
+      write.csv(week_Avg(), file, row.names = FALSE)
+    },
+    contentType = "text/csv"
+  )
+  
+  # Pie Chart of Active Customers :
+  output$pie <- renderPlot({
+      data<-imported_data()
+  hist(data$Calls,
+      breaks = 40,
+      xlim = c(-2, 2),
+      ylim = c(0, 1),
+      lty = "blank",
+      xlab = "value",
+      freq = FALSE,
+      main = ""
+    )  
+  
+  })
+  
+  
+  ################# Tab2 : Weekwise Summary ##################  
+  
+  output$sum <- renderPrint({
+  #   
+    teledata <- imported_data()
+  #   
+    summary(subset(teledata,(Week %in% input$ID) & (Age_Group %in% input$age) & (Gender %in% input$gender), select= c(-CustID,-Week)))
+  #   
+  })
+  # 
+  # ################## Tab3 : Weekly usage ###################
+  # 
+  output$usage<-renderPlot({
+  #   
+    teledata <- imported_data()
+  #   
+    xy<-subset(teledata,(Age_Group %in% input$age) & (Gender %in% input$gender))
+  #   
+    xyz <- as.data.frame(summarise(group_by(xy,Week),
+                                   Avg_Calls=mean(Calls),
+                                   Avg_Minutes=mean(Minutes),
+                                   Avg_Amt=mean(Amt)))
+  #   
+    qplot(x=Week,y=xyz[,as.numeric(input$var)], data=xyz, xlab="Week",
+          ylab=paste(names(xyz[as.numeric(input$var)])),
+          main="Weekwise Trendline")+
+      geom_line(size=0.7,colour="pink") +
+      theme_bw()
+  })
+  # 
+  # 
+  # ################ Tab4 :Volume of Business ################
+  output$bar <- renderPlot({
+    teledata <- imported_data()
+    xy<-subset(teledata,(Age_Group %in% input$age) & (Gender %in% input$gender))
+  #   
+    xyz <- as.data.frame(summarise(group_by(xy,Week),
+                                   Avg_Calls=mean(Calls),
+                                   Avg_Minutes=mean(Minutes),
+                                   Avg_Amt=mean(Amt)))
+    teledata_new <- subset(teledata, select=c(-Week))
+    data<-with(teledata_new,
+               tapply(teledata_new[,as.numeric(input$var)],
+                      list(Gender,Age_Group),mean))
+    data.m <- melt(data,id.vars=Gender)
+    colnames(data.m)[1] <- "Gender"
+  #   
+    ggplot(data.m,aes(Var2,value)) +
+      geom_bar(aes(fill=Gender),position="dodge",stat="identity") +
+      labs(title="Customer_Average_usage")+
+      labs(x="Age_Group", y=names(xyz[as.numeric(input$var)]))+ theme_bw()
+  })
+  
+  observeEvent(input$tabs, {
+    if(input$tabs=="data"){
+      show("age")
+      show("gender")
+      hide("ID")
+      hide("var")
+    }})
+  observeEvent(input$tabs, {
+    if(input$tabs=="summa"){
+      show("age")
+      show("gende*-r")
+      show("ID")
+      hide("var")
+    }})
+  observeEvent(input$tabs, {
+    if(input$tabs=="Usag"){
+      show("age")
+      show("gender")
+      show("var")
+      hide("ID")
+    }})
+
+  observeEvent(input$tabs, {
+    if(input$tabs=="vol"){
+      show("var")
+      hide("age")
+      hide("gender")
+      hide("ID")
+    }})
+}
+
+shinyApp(ui=ui, server=server)
+```
+
